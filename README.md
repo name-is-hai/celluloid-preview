@@ -1,12 +1,12 @@
 > **Celluloid Preview fork:** native progress-bar thumbnail previews. See [build instructions and behavior](README-PREVIEW.md).
 
-# Celluloid
+# Celluloid Preview
 
 Celluloid (formerly GNOME MPV) is a simple GTK+ frontend for mpv. Celluloid
 interacts with mpv via the client API exported by libmpv, allowing access to
 mpv's powerful playback capabilities.
 
-![Screenshot](https://celluloid-player.github.io/images/screenshot-0.png)
+![Celluloid timeline thumbnail preview](docs/assets/preview.png)
 
 Repository Mirror: https://codeberg.org/celluloid-player/celluloid
 
