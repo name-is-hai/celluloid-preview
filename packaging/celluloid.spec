@@ -1,7 +1,7 @@
 Name:           celluloid
 Epoch:          1
 Version:        0.30
-Release:        2.preview2%{?dist}
+Release:        4%{?dist}
 Summary:        GTK video player with thumbnail previews over the progress bar
 License:        GPL-3.0-or-later
 URL:            https://github.com/name-is-hai/celluloid-preview
@@ -53,6 +53,9 @@ separately from playback and stops when the pointer leaves the progress bar.
 %{_mandir}/man1/celluloid.1*
 
 %changelog
+* Sat Nov 07 2026 Celluloid Preview Maintainers - 1:0.30-4
+- Publish independently built and tested Fedora RPM releases for Strata to import
+
 * Sat Nov 07 2026 Celluloid Preview Maintainers - 1:0.30-2.preview2
 - Update thumbnails while moving instead of restarting the decoder
 - Use fast keyframe previews, an LRU cache and a compact popup frame

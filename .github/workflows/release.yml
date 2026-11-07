@@ -1,0 +1,54 @@
+name: Release preview RPM
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing RPM version tag (for example v0.30-3)
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Validate RPM release tag
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          version=$(awk '/^Version:/ {print $2; exit}' packaging/celluloid.spec)
+          release=$(awk '/^Release:/ {sub(/%.*/, "", $2); print $2; exit}' packaging/celluloid.spec)
+          [[ "$TAG" == "v$version-$release" ]]
+      - name: Install Podman
+        run: sudo apt-get update && sudo apt-get install -y podman
+      - name: Build Fedora 44 RPM and run preview tests
+        run: tools/build-rpm.sh
+      - name: Collect release assets and checksums
+        run: |
+          mkdir assets
+          find build-output/RPMS -type f -name '*.rpm' \
+            ! -name '*-debuginfo-*' ! -name '*-debugsource-*' -exec cp -- {} assets/ \;
+          find build-output/SRPMS -type f -name '*.src.rpm' -exec cp -- {} assets/ \;
+          test -n "$(find assets -name '*.x86_64.rpm' -print -quit)"
+          (cd assets; sha256sum *.rpm > SHA256SUMS)
+      - name: Publish independent Celluloid release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          gh release create "$TAG" assets/* --verify-tag \
+            --title "Celluloid Preview $TAG" \
+            --notes 'Fedora 44 x86_64 RPM with native timeline thumbnails. Includes the source RPM and SHA256SUMS. Built and tested independently of Strata.'

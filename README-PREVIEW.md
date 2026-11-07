@@ -55,3 +55,14 @@ build/src/celluloid --new-window /path/to/video.mkv
 This is a preview fork, not an upstream Celluloid release. The `upstream` Git
 remote points to the original project. No Strata integration or system
 installation is performed by checking out this repository.
+
+## Independent releases
+
+Download the Fedora 44 runtime RPM and SHA256SUMS from this repository’s GitHub
+Releases. Verify with `sha256sum --check --ignore-missing SHA256SUMS`, then install
+with `sudo dnf install ./celluloid-*.x86_64.rpm`.
+
+Maintainers bump Version or Release in `packaging/celluloid.spec`, commit, and
+push a matching tag such as `v0.30-3`. The release workflow builds the RPM, runs
+the preview tests, and publishes the runtime RPM, source RPM and checksums.
+Strata downloads a pinned release instead of compiling this source itself.
