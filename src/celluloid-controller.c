@@ -129,6 +129,20 @@ static void
 set_dark_theme_enable(CelluloidController *controller, gboolean value);
 
 static void
+preview_file_handler(CelluloidMpv *mpv, gint event, gpointer event_data, gpointer data)
+{
+	CelluloidController *controller = data;
+	if(event == MPV_EVENT_FILE_LOADED)
+	{
+		gchar *path = celluloid_model_get_current_path(controller->model);
+		celluloid_view_set_preview_file(controller->view, path);
+		g_free(path);
+	}
+	else if(event == MPV_EVENT_START_FILE || event == MPV_EVENT_END_FILE)
+		celluloid_view_set_preview_file(controller->view, NULL);
+}
+
+static void
 connect_signals(CelluloidController *controller);
 
 static gboolean
@@ -698,6 +712,8 @@ set_dark_theme_enable(	CelluloidController *controller,
 static void
 connect_signals(CelluloidController *controller)
 {
+	g_signal_connect(controller->model, "mpv-event-notify",
+		G_CALLBACK(preview_file_handler), controller);
 	g_object_bind_property(	controller->model, "core-idle",
 				controller, "idle",
 				G_BINDING_DEFAULT );

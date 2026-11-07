@@ -45,6 +45,14 @@ struct _CelluloidSeekBar
 	GtkWidget *label;
 	GtkWidget *popover;
 	GtkWidget *popover_label;
+	GtkWidget *preview_picture;
+	gchar *preview_file;
+	guint preview_timeout_id;
+	guint preview_generation;
+	gint preview_second;
+	GSubprocess *preview_process;
+	GHashTable *preview_cache;
+	GQueue preview_lru;
 	GPtrArray *chapter_list;
 	gdouble pos;
 	gdouble duration;
@@ -108,10 +116,194 @@ update_popover_visibility(CelluloidSeekBar *bar);
 
 G_DEFINE_TYPE(CelluloidSeekBar, celluloid_seek_bar, GTK_TYPE_BOX)
 
+/* Local-file thumbnails never seek the playback mpv instance. All decoder I/O
+ * is asynchronous; a weak widget reference and generation discard late frames. */
+typedef struct
+{
+	GWeakRef bar;
+	GSubprocess *process;
+	guint generation;
+	guint deadline;
+	gint second;
+} PreviewRequest;
+
+static void
+cancel_preview(CelluloidSeekBar *bar)
+{
+	bar->preview_generation++;
+	if(bar->preview_timeout_id)
+	{
+		g_source_remove(bar->preview_timeout_id);
+		bar->preview_timeout_id = 0;
+	}
+	if(bar->preview_process)
+	{
+		g_subprocess_force_exit(bar->preview_process);
+		g_clear_object(&bar->preview_process);
+	}
+}
+
+static gboolean
+preview_deadline(gpointer data)
+{
+	PreviewRequest *request = data;
+	request->deadline = 0;
+	g_subprocess_force_exit(request->process);
+	return G_SOURCE_REMOVE;
+}
+
+static gboolean start_preview(gpointer data);
+
+static void
+preview_ready(GObject *source, GAsyncResult *result, gpointer data)
+{
+	PreviewRequest *request = data;
+	GBytes *bytes = NULL;
+	GError *error = NULL;
+	gboolean ok = g_subprocess_communicate_finish(
+		G_SUBPROCESS(source), result, &bytes, NULL, &error);
+	CelluloidSeekBar *bar = g_weak_ref_get(&request->bar);
+	if(request->deadline) g_source_remove(request->deadline);
+
+	if(bar && bar->preview_process == request->process)
+	{
+		g_clear_object(&bar->preview_process);
+		if(bar->popover_visible && request->generation == bar->preview_generation)
+		{
+			GdkTexture *texture = NULL;
+			if(ok && g_subprocess_get_successful(request->process)
+				&& bytes && g_bytes_get_size(bytes) == 240 * 135 * 4)
+			{
+				texture = gdk_memory_texture_new(240, 135,
+					GDK_MEMORY_R8G8B8A8, bytes, 240 * 4);
+				gpointer key = GINT_TO_POINTER(request->second);
+				if(g_hash_table_contains(bar->preview_cache, key))
+					g_queue_remove(&bar->preview_lru, key);
+				else if(g_hash_table_size(bar->preview_cache) >= 64)
+					g_hash_table_remove(bar->preview_cache,
+						g_queue_pop_head(&bar->preview_lru));
+				g_hash_table_replace(bar->preview_cache, key, texture);
+				g_queue_push_tail(&bar->preview_lru, key);
+			}
+			GdkTexture *wanted = g_hash_table_lookup(bar->preview_cache,
+				GINT_TO_POINTER(bar->preview_second));
+			if(wanted || texture)
+			{
+				gtk_picture_set_paintable(GTK_PICTURE(bar->preview_picture),
+					GDK_PAINTABLE(wanted ? wanted : texture));
+				gtk_widget_set_visible(bar->preview_picture, TRUE);
+			}
+			/* Finish useful work while the pointer moves, then serve only the
+			 * most recent position. Never spawn a queue of obsolete requests. */
+			if(!wanted && request->second != bar->preview_second
+				&& !bar->preview_timeout_id)
+				bar->preview_timeout_id = g_idle_add(start_preview, bar);
+		}
+	}
+	g_clear_error(&error);
+	g_clear_pointer(&bytes, g_bytes_unref);
+	g_clear_object(&bar);
+	g_weak_ref_clear(&request->bar);
+	g_object_unref(request->process);
+	g_free(request);
+}
+
+static gboolean
+start_preview(gpointer data)
+{
+	CelluloidSeekBar *bar = data;
+	bar->preview_timeout_id = 0;
+	if(!bar->preview_file || !bar->popover_visible || bar->preview_process)
+		return G_SOURCE_REMOVE;
+	if(g_hash_table_contains(bar->preview_cache, GINT_TO_POINTER(bar->preview_second)))
+		return G_SOURCE_REMOVE;
+
+	gchar timestamp[32];
+	g_ascii_formatd(timestamp, sizeof(timestamp), "%.3f", bar->preview_second);
+	GError *error = NULL;
+	bar->preview_process = g_subprocess_new(
+		G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE,
+		&error, "ffmpeg", "-v", "error", "-nostdin", "-threads", "1",
+		"-filter_threads", "1", "-protocol_whitelist", "file,pipe",
+		"-ss", timestamp, "-noaccurate_seek", "-skip_frame", "nokey", "-i", bar->preview_file,
+		"-map", "0:v:0", "-frames:v", "1", "-vf",
+		"scale=240:135:force_original_aspect_ratio=decrease,format=rgba,pad=240:135:(ow-iw)/2:(oh-ih)/2:color=black",
+		"-an", "-sn", "-dn", "-pix_fmt", "rgba", "-threads", "1",
+		"-f", "rawvideo", "pipe:1", NULL);
+	if(!bar->preview_process)
+	{
+		g_debug("Seek preview unavailable: %s", error->message);
+		g_clear_error(&error);
+		return G_SOURCE_REMOVE;
+	}
+	PreviewRequest *request = g_new0(PreviewRequest, 1);
+	g_weak_ref_init(&request->bar, bar);
+	request->process = g_object_ref(bar->preview_process);
+	request->generation = bar->preview_generation;
+	request->second = bar->preview_second;
+	request->deadline = g_timeout_add_seconds(8, preview_deadline, request);
+	g_subprocess_communicate_async(bar->preview_process, NULL, NULL,
+		preview_ready, request);
+	return G_SOURCE_REMOVE;
+}
+
+static void
+request_preview(CelluloidSeekBar *bar, gdouble time)
+{
+	if(!bar->preview_file || !bar->popover_visible || bar->duration <= 0) return;
+	gint second = (gint)CLAMP(time, 0, MAX(0, bar->duration - 0.1));
+	if(second == bar->preview_second) return;
+	bar->preview_second = second;
+	GdkTexture *cached = g_hash_table_lookup(bar->preview_cache,
+		GINT_TO_POINTER(second));
+	if(cached)
+	{
+		gpointer key = GINT_TO_POINTER(second);
+		g_queue_remove(&bar->preview_lru, key);
+		g_queue_push_tail(&bar->preview_lru, key);
+		gtk_picture_set_paintable(GTK_PICTURE(bar->preview_picture), GDK_PAINTABLE(cached));
+		gtk_widget_set_visible(bar->preview_picture, TRUE);
+	}
+	else if(!bar->preview_process && !bar->preview_timeout_id)
+		bar->preview_timeout_id = g_timeout_add(40, start_preview, bar);
+}
+
+void
+celluloid_seek_bar_set_preview_file(CelluloidSeekBar *bar, const gchar *path)
+{
+	GFile *file = path && *path ? g_file_new_for_commandline_arg(path) : NULL;
+	gchar *local = file && g_file_is_native(file) ? g_file_get_path(file) : NULL;
+	g_clear_object(&file);
+	if(g_strcmp0(local, bar->preview_file) == 0)
+	{
+		g_free(local);
+		return;
+	}
+	cancel_preview(bar);
+	g_free(bar->preview_file);
+	bar->preview_file = local;
+	bar->preview_second = -1;
+	g_hash_table_remove_all(bar->preview_cache);
+	g_queue_clear(&bar->preview_lru);
+	gtk_picture_set_paintable(GTK_PICTURE(bar->preview_picture), NULL);
+	gtk_widget_set_visible(bar->preview_picture, FALSE);
+}
+
+
 static void
 dispose(GObject *object)
 {
-	g_clear_object(&CELLULOID_SEEK_BAR(object)->popover);
+	CelluloidSeekBar *bar = CELLULOID_SEEK_BAR(object);
+	cancel_preview(bar);
+	if(bar->popover_timeout_id)
+	{
+		g_source_remove(bar->popover_timeout_id);
+		bar->popover_timeout_id = 0;
+	}
+	g_clear_pointer(&bar->preview_file, g_free);
+	g_clear_pointer(&bar->preview_cache, g_hash_table_unref);
+	g_queue_clear(&bar->preview_lru);
+	g_clear_object(&bar->popover);
 
 	G_OBJECT_CLASS(celluloid_seek_bar_parent_class)->dispose(object);
 }
@@ -262,6 +454,8 @@ leave_handler(GtkEventControllerMotion *widget, gpointer data)
 	}
 
 	bar->popover_visible = FALSE;
+	cancel_preview(bar);
+	bar->preview_second = -1;
 	g_object_notify(G_OBJECT(bar), "popover-visible");
 
 	bar->popover_timeout_id =
@@ -320,9 +514,10 @@ motion_handler(	GtkEventControllerMotion *controller,
 	const gdouble page_size = gtk_adjustment_get_page_size(adjustment);
 
 	const gdouble progress =
-		((gint)x - trough_start) / (gdouble)trough_length;
+		trough_length > 0 ? (x - trough_start) / (gdouble)trough_length : 0;
 	const gdouble time =
 		lower + progress * (upper - lower - page_size);
+	request_preview(bar, time);
 	gchar *time_text =
 		format_time((gint)time, bar->duration >= 3600);
 
@@ -516,6 +711,14 @@ celluloid_seek_bar_init(CelluloidSeekBar *bar)
 	bar->label = celluloid_time_label_new();
 	bar->popover = g_object_ref_sink(gtk_popover_new());
 	bar->popover_label = gtk_label_new(NULL);
+	bar->preview_picture = gtk_picture_new();
+	gtk_widget_add_css_class(bar->popover, "seek-preview");
+	gtk_popover_set_has_arrow(GTK_POPOVER(bar->popover), FALSE);
+	bar->preview_second = -1;
+	bar->preview_cache = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, g_object_unref);
+	gtk_picture_set_content_fit(GTK_PICTURE(bar->preview_picture), GTK_CONTENT_FIT_CONTAIN);
+	gtk_widget_set_size_request(bar->preview_picture, 240, 135);
+	gtk_widget_set_visible(bar->preview_picture, FALSE);
 	bar->chapter_list = NULL;
 	bar->duration = 0;
 	bar->pause = TRUE;
@@ -537,7 +740,10 @@ celluloid_seek_bar_init(CelluloidSeekBar *bar)
 	gtk_widget_set_can_focus(bar->seek_bar, FALSE);
 
 	gtk_popover_set_position(GTK_POPOVER(bar->popover), GTK_POS_TOP);
-	gtk_popover_set_child(GTK_POPOVER(bar->popover), bar->popover_label);
+	GtkWidget *preview_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
+	gtk_box_append(GTK_BOX(preview_box), bar->preview_picture);
+	gtk_box_append(GTK_BOX(preview_box), bar->popover_label);
+	gtk_popover_set_child(GTK_POPOVER(bar->popover), preview_box);
 	gtk_widget_set_visible(bar->popover_label, TRUE);
 
 	g_signal_connect(	bar->seek_bar,

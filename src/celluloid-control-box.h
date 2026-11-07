@@ -37,6 +37,9 @@ void
 celluloid_control_box_set_enabled(CelluloidControlBox *box, gboolean enabled);
 
 void
+celluloid_control_box_set_preview_file(CelluloidControlBox *box, const gchar *path);
+
+void
 celluloid_control_box_set_seek_bar_pos(CelluloidControlBox *box, gdouble pos);
 
 void

@@ -895,6 +895,13 @@ celluloid_control_box_new(void)
 }
 
 void
+celluloid_control_box_set_preview_file(CelluloidControlBox *box, const gchar *path)
+{
+	celluloid_seek_bar_set_preview_file(CELLULOID_SEEK_BAR(box->seek_bar), path);
+	celluloid_seek_bar_set_preview_file(CELLULOID_SEEK_BAR(box->secondary_seek_bar), path);
+}
+
+void
 celluloid_control_box_set_seek_bar_pos(CelluloidControlBox *box, gdouble pos)
 {
 	celluloid_seek_bar_set_pos(CELLULOID_SEEK_BAR(box->seek_bar), pos);

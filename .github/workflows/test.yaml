@@ -1,18 +1,23 @@
-name: Test
+name: Build and test preview RPM
 on:
   push:
-    branches: ["master"]
-    pull_request:
-      types:
-        - opened
-        - edited
+    branches: [main]
+  pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  fedora:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v25
+      - uses: actions/checkout@v7.0.1
+      - name: Build RPM and test thumbnail previews
+        run: tools/build-rpm.sh
+      - uses: actions/upload-artifact@v7.0.2
         with:
-          nix_path: nixpkgs=channel:nixos-unstable
-      - run: nix --extra-experimental-features 'nix-command flakes' develop nixpkgs#celluloid --command bash -c 'meson setup build && ninja -C build test'
+          name: celluloid-preview-fedora44
+          path: |
+            build-output/RPMS/**/*.rpm
+            build-output/SRPMS/*.rpm
+          if-no-files-found: error

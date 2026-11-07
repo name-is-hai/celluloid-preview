@@ -554,6 +554,8 @@ load_css(CelluloidView *view)
 		"	margin-top: -6px;"
 		"	margin-bottom: -6px;"
 		"}"
+		"popover.seek-preview > contents"
+		"{ padding: 4px; margin: 0; border-radius: 2px; box-shadow: none; }"
 		".dialog-action-area"
 		"{"
 		"	margin: -12px 12px 12px 0px;"
@@ -1745,6 +1747,17 @@ void
 celluloid_view_set_fullscreen(CelluloidView *view, gboolean fullscreen)
 {
 	g_object_set(view, "fullscreened", fullscreen, NULL);
+}
+
+void
+celluloid_view_set_preview_file(CelluloidView *view, const gchar *path)
+{
+	CelluloidMainWindow *window = CELLULOID_MAIN_WINDOW(view);
+	CelluloidControlBox *normal = celluloid_main_window_get_control_box(window);
+	CelluloidVideoArea *video = celluloid_main_window_get_video_area(window);
+	CelluloidControlBox *floating = celluloid_video_area_get_control_box(video);
+	celluloid_control_box_set_preview_file(normal, path);
+	celluloid_control_box_set_preview_file(floating, path);
 }
 
 void

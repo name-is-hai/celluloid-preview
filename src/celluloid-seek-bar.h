@@ -34,6 +34,9 @@ GtkWidget *
 celluloid_seek_bar_new(void);
 
 void
+celluloid_seek_bar_set_preview_file(CelluloidSeekBar *bar, const gchar *path);
+
+void
 celluloid_seek_bar_set_duration(CelluloidSeekBar *bar, gdouble duration);
 
 void

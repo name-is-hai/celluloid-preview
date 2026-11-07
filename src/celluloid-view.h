@@ -105,6 +105,9 @@ void
 celluloid_view_set_fullscreen(CelluloidView *view, gboolean fullscreen);
 
 void
+celluloid_view_set_preview_file(CelluloidView *view, const gchar *path);
+
+void
 celluloid_view_set_time_position(CelluloidView *view, gdouble position);
 
 void
